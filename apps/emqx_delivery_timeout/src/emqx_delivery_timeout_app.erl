@@ -14,12 +14,35 @@ start(_StartType, _StartArgs) ->
     %% Register hooks to listen for message lifecycle events
     %% This integrates with EMQX without modifying core logic
     ok = emqx_delivery_timeout:register_hooks(),
+    %% Check for existing rules and enable if needed
+    ok = maybe_enable_from_existing_rules(),
     emqx_delivery_timeout_sup:start_link().
 
 stop(_State) ->
     %% Unregister hooks on application stop
     ok = emqx_delivery_timeout:unregister_hooks(),
     ok.
+
+%% @doc Check if any existing rules use delivery.timeout event and enable if so
+maybe_enable_from_existing_rules() ->
+    try
+        case erlang:module_loaded(emqx_rule_engine) of
+            true ->
+                %% Use internal API to get all rules for all namespaces
+                Tags = emqx_rule_engine:get_rules_with_same_event(
+                    undefined, <<"$events/delivery/timeout">>
+                ),
+                case Tags of
+                    [] -> ok;
+                    [_ | _] -> emqx_delivery_timeout:enable()
+                end;
+            false ->
+                %% Rule engine not loaded yet
+                ok
+        end
+    catch
+        _:_ -> ok
+    end.
 
 load_config() ->
     %% Feature starts disabled, auto-enabled when rules are created

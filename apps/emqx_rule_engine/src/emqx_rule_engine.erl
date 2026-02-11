@@ -592,6 +592,8 @@ do_insert_rule(#{id := Id, namespace := Namespace} = Rule) ->
     ok = load_hooks_for_rule(Rule),
     ok = maybe_add_metrics_for_rule(RuleResId),
     true = ets:insert(?RULE_TAB, {?KEY(Namespace, Id), Rule}),
+    %% Auto-enable delivery timeout tracking if this rule uses the event
+    ok = maybe_enable_delivery_timeout(Rule),
     ok.
 
 do_delete_rule(#{id := Id, namespace := Namespace} = Rule) ->
@@ -599,6 +601,8 @@ do_delete_rule(#{id := Id, namespace := Namespace} = Rule) ->
     ok = unload_hooks_for_rule(Rule),
     ok = clear_metrics_for_rule(RuleResId),
     true = ets:delete(?RULE_TAB, ?KEY(Namespace, Id)),
+    %% Auto-disable delivery timeout tracking if no more rules use this event
+    ok = maybe_disable_delivery_timeout(),
     ok.
 
 do_update_rule_index(#{id := Id, namespace := Namespace, from := From}) ->
@@ -869,6 +873,34 @@ join(BinaryTF) when is_binary(BinaryTF) ->
     BinaryTF;
 join(Words) when is_list(Words) ->
     emqx_topic:join(Words).
+
+%%--------------------------------------------------------------------
+%% Delivery Timeout Feature Auto-Enable/Disable
+%%--------------------------------------------------------------------
+
+%% @doc Auto-enable delivery.timeout tracking when a rule for it is created
+maybe_enable_delivery_timeout(#{from := Events}) ->
+    case lists:member('delivery.timeout', Events) of
+        true ->
+            catch emqx_delivery_timeout:enable(),
+            ok;
+        false ->
+            ok
+    end.
+
+%% @doc Auto-disable delivery.timeout tracking if no more rules use it
+maybe_disable_delivery_timeout() ->
+    %% Check if any rules still use 'delivery.timeout' event
+    Tags = get_rules_with_same_event(undefined, <<"$events/delivery/timeout">>),
+    case Tags of
+        [] ->
+            %% No more rules using delivery.timeout - disable to save resources
+            catch emqx_delivery_timeout:disable(),
+            ok;
+        [_ | _] ->
+            %% Still have rules using it - keep enabled
+            ok
+    end.
 
 get_root_config_from_all_namespaces() ->
     Default = #{},
