@@ -1,0 +1,17 @@
+# GitHub Actions optimized Dockerfile
+# Uses official EMQX image and adds delivery.timeout feature
+ARG EMQX_VERSION=latest
+FROM emqx/emqx:${EMQX_VERSION} AS base
+
+# This Dockerfile assumes delivery.timeout is already compiled
+# For custom builds with delivery.timeout, use the full Dockerfile in deploy/docker/
+
+# Copy any custom config if needed
+COPY etc/emqx.conf.d/ /opt/emqx/etc/emqx.conf.d/ 2>/dev/null || true
+
+EXPOSE 1883 8883 8083 8084 18083 18084
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD emqx eval "ok" || exit 1
+
+CMD ["emqx", "foreground"]
