@@ -505,6 +505,9 @@ dequeue(ClientInfo = #{zone := Zone}, Cnt, Msgs, Q) ->
                     _ = emqx_session_events:handle_event(ClientInfo, {expired, Msg}),
                     dequeue(ClientInfo, Cnt, Msgs, Q1);
                 false ->
+                    %% Cancel delivery timeout tracking for this dequeued message
+                    MsgId = emqx_message:id(Msg),
+                    emqx_delivery_timeout:cancel_tracking(MsgId),
                     dequeue(ClientInfo, acc_cnt(Msg, Cnt), [Msg | Msgs], Q1)
             end
     end.
@@ -572,6 +575,10 @@ enqueue_msg(ClientInfo, #message{qos = QoS} = Msg, Session = #session{mqueue = Q
     NewSession = Session#session{mqueue = NQ},
     case Dropped of
         undefined ->
+            %% Track this queued message for delivery timeout
+            MsgId = emqx_message:id(Msg),
+            ClientId = maps:get(clientid, ClientInfo, undefined),
+            emqx_delivery_timeout:track_queued_message(MsgId, ClientId, Msg),
             NewSession;
         _Msg ->
             NQInfo = emqx_mqueue:info(NQ),
