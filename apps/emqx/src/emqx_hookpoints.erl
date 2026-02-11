@@ -59,6 +59,7 @@
     'message.acked',
     'message.nack',
     'delivery.dropped',
+    'delivery.timeout',
     'delivery.completed',
     'cm.channel.unregistered'
 ]).
@@ -253,6 +254,11 @@ when
     fold_callback_result(boolean()).
 
 -callback 'delivery.dropped'(emqx_types:clientinfo(), emqx_types:message(), _Reason :: atom()) ->
+    callback_result().
+
+-callback 'delivery.timeout'(
+    emqx_types:clientid(), emqx_types:message(), _QueueTimeMs :: pos_integer()
+) ->
     callback_result().
 
 -callback 'delivery.completed'(emqx_types:message(), #{

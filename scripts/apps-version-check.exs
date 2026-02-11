@@ -32,24 +32,28 @@ defmodule AppsVersionCheck do
   """
 
   def latest_release!() do
-    {out, 0} =
-      System.cmd(
-        "bash",
-        ["-c", "./scripts/find-prev-rel-tag.sh"],
-        env: [{"PREV_TAG_MATCH_PATTERN", "*"}]
-      )
+    case System.cmd(
+           "bash",
+           ["-c", "./scripts/find-prev-rel-tag.sh"],
+           env: [{"PREV_TAG_MATCH_PATTERN", "*"}]
+         ) do
+      {_out, code} when code != 0 ->
+        # No tags found, return nil to skip version checks
+        nil
 
-    git_ref = String.trim(out)
+      {out, 0} ->
+        git_ref = String.trim(out)
 
-    vsn =
-      git_ref
-      |> String.replace(~r/^(e|v)/, "")
-      |> Version.parse!()
+        vsn =
+          git_ref
+          |> String.replace(~r/^(e|v)/, "")
+          |> Version.parse!()
 
-    %{
-      git_ref: git_ref,
-      latest_release: vsn
-    }
+        %{
+          git_ref: git_ref,
+          latest_release: vsn
+        }
+    end
   end
 
   def mix_exs_at(filepath, git_ref) do
@@ -233,36 +237,45 @@ defmodule AppsVersionCheck do
     {opts, _rest} = OptionParser.parse!(argv, strict: [auto_fix: :boolean])
 
     context =
-      latest_release!()
-      |> Map.put(:auto_fix, !!opts[:auto_fix])
+      case latest_release!() do
+        nil ->
+          log("No git tags found, skipping version checks")
+          nil
 
-    log("Context: #{inspect(context, pretty: true)}")
+        release ->
+          release
+          |> Map.put(:auto_fix, !!opts[:auto_fix])
+      end
 
-    apps =
-      "apps"
-      |> File.ls!()
-      |> Enum.filter(fn app ->
-        ["apps", app]
-        |> Path.join()
-        |> File.dir?()
-      end)
+    if context do
+      log("Context: #{inspect(context, pretty: true)}")
 
-    apps
-    |> Enum.reject(&has_valid_app_vsn?(&1, context))
-    |> case do
-      [] ->
-        :ok
+      apps =
+        "apps"
+        |> File.ls!()
+        |> Enum.filter(fn app ->
+          ["apps", app]
+          |> Path.join()
+          |> File.dir?()
+        end)
 
-      invalid_apps ->
-        log_err([
-          "Errors were found\n",
-          "Invalid apps: \n",
-          [inspect(invalid_apps, pretty: true), "\n"],
-          "Run this script again with `--auto-fix` to automatically fix issues,",
-          " or fix them manually."
-        ])
+      apps
+      |> Enum.reject(&has_valid_app_vsn?(&1, context))
+      |> case do
+        [] ->
+          :ok
 
-        System.halt(1)
+        invalid_apps ->
+          log_err([
+            "Errors were found\n",
+            "Invalid apps: \n",
+            [inspect(invalid_apps, pretty: true), "\n"],
+            "Run this script again with `--auto-fix` to automatically fix issues,",
+            " or fix them manually."
+          ])
+
+          System.halt(1)
+      end
     end
   end
 end

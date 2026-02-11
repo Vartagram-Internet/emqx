@@ -1,0 +1,53 @@
+# Build stage - compile EMQX for Linux in Docker environment
+FROM ghcr.io/emqx/emqx-builder/6.0-9:1.19.1-28.2-2-debian13 AS builder
+ARG PROFILE=emqx-enterprise
+
+WORKDIR /emqx
+COPY . /emqx
+
+# Build EMQX for Linux
+RUN make ${PROFILE}-tgz
+
+# Runtime stage - use slim image
+FROM debian:13-slim
+
+LABEL maintainer="EMQX Team"
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libncurses6 \
+    libssl3 \
+    libatomic1 \
+    procps \
+    net-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /emqx
+
+# Extract compiled release from builder
+COPY --from=builder /emqx/_packages/emqx/*.tar.gz /tmp/emqx.tar.gz
+RUN tar zxf /tmp/emqx.tar.gz -C /emqx && rm /tmp/emqx.tar.gz
+
+# Set proper permissions
+RUN chmod +x /emqx/bin/emqx /emqx/bin/emqx_ctl
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD /emqx/bin/emqx eval "ok" || exit 1
+
+# Expose ports
+# MQTT
+EXPOSE 1883
+# MQTTS  
+EXPOSE 8883
+# HTTP API
+EXPOSE 18084
+# Dashboard
+EXPOSE 18083
+# WebSocket
+EXPOSE 8083
+# Secure WebSocket
+EXPOSE 8084
+
+# Start EMQX
+CMD ["/emqx/bin/emqx", "foreground"]

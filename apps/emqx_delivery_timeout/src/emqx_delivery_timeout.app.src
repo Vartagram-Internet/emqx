@@ -1,0 +1,15 @@
+{application, emqx_delivery_timeout, [
+    {description, "EMQX Delivery Timeout Event Tracking"},
+    {vsn, "0.1.0"},
+    {registered, [emqx_delivery_timeout_sup, emqx_delivery_timeout]},
+    {mod, {emqx_delivery_timeout_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        emqx
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache 2.0"]},
+    {links, []}
+]}.

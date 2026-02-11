@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  emqx:
+    build:
+      context: .
+      dockerfile: Dockerfile.prebuilt
+    image: emqx:with-delivery-timeout
+    container_name: emqx-with-delivery-timeout
+    environment:
+      # Node configuration
+      EMQX_NODE__NAME: emqx@127.0.0.1
+      EMQX_NODE__COOKIE: emqx_secret_cookie
+
+      # Dashboard configuration
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: admin123
+      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
+
+      # Listener configuration
+      EMQX_LISTENERS__TCP__DEFAULT__BIND: "0.0.0.0:1883"
+      EMQX_LISTENERS__WS__DEFAULT__BIND: "0.0.0.0:8083"
+      EMQX_LISTENERS__SSL__DEFAULT__ENABLE: "false"
+
+      # Performance tuning
+      EMQX_BROKER__MAX_CONNECTIONS: 1000000
+      EMQX_BROKER__MAX_PACKET_SIZE: 1048576
+
+      # Delivery timeout feature
+      # Default: 30 seconds, disabled by default (enabled when rules created)
+      EMQX_DELIVERY_TIMEOUT__TIMEOUT_MS: "30000"
+      EMQX_DELIVERY_TIMEOUT__MAX_TRACKED: "1000000"
+      EMQX_DELIVERY_TIMEOUT__ENABLED: "false"
+
+    ports:
+      # MQTT
+      - "1883:1883"
+      # MQTT over WebSocket
+      - "8083:8083"
+      # Dashboard
+      - "18083:18083"
+      # API
+      - "18084:18084"
+
+    volumes:
+      # Persistent data
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+      - emqx_etc:/opt/emqx/etc
+
+    networks:
+      - emqx-network
+
+    healthcheck:
+      test: ["CMD", "emqx", "eval", "emqx:is_running()."]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    restart: on-failure
+
+volumes:
+  emqx_data:
+    driver: local
+  emqx_log:
+    driver: local
+  emqx_etc:
+    driver: local
+
+networks:
+  emqx-network:
+    driver: bridge

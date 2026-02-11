@@ -69,6 +69,7 @@
             emqx_bridge_mqtt,
             emqx_bridge_http,
             emqx_rule_engine,
+            emqx_delivery_timeout,
             emqx_modules,
             emqx_management,
             emqx_dashboard,

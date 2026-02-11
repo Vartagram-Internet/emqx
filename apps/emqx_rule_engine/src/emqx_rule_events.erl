@@ -43,6 +43,7 @@
     on_message_delivered/3,
     on_message_acked/3,
     on_delivery_dropped/4,
+    on_delivery_timeout/3,
     on_bridge_message_received/3
 ]).
 
@@ -79,7 +80,8 @@ event_names() ->
         'message.dropped',
         'message.transformation_failed',
         'schema.validation_failed',
-        'delivery.dropped'
+        'delivery.dropped',
+        'delivery.timeout'
     ].
 
 event_topics_enum() ->
@@ -98,6 +100,7 @@ event_topics_enum() ->
         '$events/message/acked',
         '$events/message/dropped',
         '$events/message/delivery_dropped',
+        '$events/delivery/timeout',
         '$events/message_transformation/failed',
         '$events/schema_validation/failed',
         %% Topics below are kept for backwards compatibility.
@@ -352,6 +355,19 @@ on_delivery_dropped(ClientInfo, Message, Reason, Conf) ->
             )
     end,
     {ok, Message}.
+
+on_delivery_timeout(ClientId, Message, QueueTimeMs) ->
+    case ignore_sys_message(Message) of
+        true ->
+            ok;
+        false ->
+            apply_event(
+                'delivery.timeout',
+                fun() -> eventmsg_delivery_timeout(ClientId, Message, QueueTimeMs) end,
+                #{}
+            )
+    end,
+    ok.
 
 %%--------------------------------------------------------------------
 %% Event Messages
@@ -840,6 +856,42 @@ eventmsg_acked(
         #{headers => Headers}
     ).
 
+eventmsg_delivery_timeout(
+    ClientId,
+    Message = #message{
+        id = Id,
+        from = From,
+        qos = QoS,
+        flags = Flags,
+        topic = Topic,
+        headers = Headers,
+        payload = Payload,
+        timestamp = Timestamp
+    },
+    QueueTimeMs
+) ->
+    with_basic_columns(
+        'delivery.timeout',
+        #{
+            id => emqx_guid:to_hexstr(Id),
+            reason => <<"queue_timeout">>,
+            from_clientid => From,
+            from_username => emqx_message:get_header(username, Message, undefined),
+            clientid => ClientId,
+            payload => Payload,
+            topic => Topic,
+            qos => QoS,
+            flags => Flags,
+            queue_time_ms => QueueTimeMs,
+            timeout_at => erlang:system_time(millisecond),
+            pub_props => emqx_utils_maps:printable_props(
+                emqx_message:get_header(properties, Message, #{})
+            ),
+            publish_received_at => Timestamp
+        },
+        #{headers => Headers}
+    ).
+
 eventmsg_delivery_dropped(
     _ClientInfo = #{
         peerhost := PeerHost,
@@ -942,6 +994,7 @@ event_info() ->
         event_info_session_subscribed(),
         event_info_session_unsubscribed(),
         event_info_delivery_dropped(),
+        event_info_delivery_timeout(),
         event_info_bridge_mqtt()
     ] ++ ee_event_info().
 
@@ -1015,6 +1068,14 @@ event_info_delivery_dropped() ->
         {<<"messages are discarded during delivery, i.e. because the message queue is full">>,
             <<"消息在投递的过程中被丢弃，比如由于消息队列已满"/utf8>>},
         <<"SELECT * FROM \"$events/message/delivery_dropped\" WHERE topic =~ 't/#'">>
+    ).
+event_info_delivery_timeout() ->
+    event_info_common(
+        'delivery.timeout',
+        {<<"message delivery timeout">>, <<"消息投递超时"/utf8>>},
+        {<<"messages that remain queued for delivery longer than the configured timeout period">>,
+            <<"消息在投递队列中停留时间超过配置的超时时间"/utf8>>},
+        <<"SELECT * FROM \"$events/delivery/timeout\" WHERE topic =~ 't/#'">>
     ).
 event_info_client_connected() ->
     event_info_common(
@@ -1193,7 +1254,9 @@ ee_test_columns('schema.validation_failed') ->
         test_columns('message.publish');
 ee_test_columns('message.transformation_failed') ->
     [{<<"transformation">>, <<"mytransformation">>}] ++
-        test_columns('message.publish').
+        test_columns('message.publish');
+ee_test_columns(_Event) ->
+    [].
 
 columns_with_exam('message.publish') ->
     [
@@ -1303,6 +1366,25 @@ columns_with_exam('delivery.dropped') ->
         {<<"topic">>, <<"t/a">>},
         {<<"qos">>, 1},
         {<<"flags">>, #{}},
+        columns_example_props(pub_props),
+        {<<"publish_received_at">>, erlang:system_time(millisecond)},
+        {<<"timestamp">>, erlang:system_time(millisecond)},
+        {<<"node">>, node()}
+    ];
+columns_with_exam('delivery.timeout') ->
+    [
+        {<<"event">>, 'delivery.timeout'},
+        {<<"id">>, emqx_guid:to_hexstr(emqx_guid:gen())},
+        {<<"reason">>, <<"queue_timeout">>},
+        {<<"from_clientid">>, <<"c_emqx_1">>},
+        {<<"from_username">>, <<"u_emqx_1">>},
+        {<<"clientid">>, <<"c_emqx_2">>},
+        {<<"payload">>, <<"{\"msg\": \"hello\"}">>},
+        {<<"topic">>, <<"t/a">>},
+        {<<"qos">>, 1},
+        {<<"flags">>, #{}},
+        {<<"queue_time_ms">>, 30000},
+        {<<"timeout_at">>, erlang:system_time(millisecond)},
         columns_example_props(pub_props),
         {<<"publish_received_at">>, erlang:system_time(millisecond)},
         {<<"timestamp">>, erlang:system_time(millisecond)},
@@ -1531,6 +1613,7 @@ hook_fun('message.dropped') -> fun ?MODULE:on_message_dropped/4;
 hook_fun('message.transformation_failed') -> fun ?MODULE:on_message_transformation_failed/3;
 hook_fun('schema.validation_failed') -> fun ?MODULE:on_schema_validation_failed/3;
 hook_fun('delivery.dropped') -> fun ?MODULE:on_delivery_dropped/4;
+hook_fun('delivery.timeout') -> fun ?MODULE:on_delivery_timeout/3;
 hook_fun('message.publish') -> fun ?MODULE:on_message_publish/2;
 hook_fun(Event) -> error({invalid_event, Event}).
 
@@ -1621,6 +1704,7 @@ event_name(<<"$events/message/delivered">>) -> 'message.delivered';
 event_name(<<"$events/message/acked">>) -> 'message.acked';
 event_name(<<"$events/message/dropped">>) -> 'message.dropped';
 event_name(<<"$events/message/delivery_dropped">>) -> 'delivery.dropped';
+event_name(<<"$events/delivery/timeout">>) -> 'delivery.timeout';
 event_name(<<"$events/message_transformation/failed">>) -> 'message.transformation_failed';
 event_name(<<"$events/schema_validation/failed">>) -> 'schema.validation_failed';
 %% Topics below are kept for backwards compatibility.
@@ -1657,6 +1741,7 @@ event_topic('message.delivered') -> <<"$events/message/delivered">>;
 event_topic('message.acked') -> <<"$events/message/acked">>;
 event_topic('message.dropped') -> <<"$events/message/dropped">>;
 event_topic('delivery.dropped') -> <<"$events/message/delivery_dropped">>;
+event_topic('delivery.timeout') -> <<"$events/delivery/timeout">>;
 event_topic('message.transformation_failed') -> <<"$events/message_transformation/failed">>;
 event_topic('schema.validation_failed') -> <<"$events/schema_validation/failed">>;
 %% Actually not publicly exposed as an event topic, but here for legacy reasons.
