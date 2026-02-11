@@ -11,9 +11,14 @@
 start(_StartType, _StartArgs) ->
     %% Initialize configuration in persistent_term for fast access
     ok = load_config(),
+    %% Register hooks to listen for message lifecycle events
+    %% This integrates with EMQX without modifying core logic
+    ok = emqx_delivery_timeout:register_hooks(),
     emqx_delivery_timeout_sup:start_link().
 
 stop(_State) ->
+    %% Unregister hooks on application stop
+    ok = emqx_delivery_timeout:unregister_hooks(),
     ok.
 
 load_config() ->

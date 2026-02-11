@@ -29,11 +29,21 @@
     start_link/0,
     track_queued_message/3,
     cancel_tracking/1,
+    cleanup_client_messages/1,
     enable/0,
     disable/0,
     is_enabled/0,
     get_stats/0,
-    update_config/1
+    update_config/1,
+    register_hooks/0,
+    unregister_hooks/0
+]).
+
+%% Hook handlers - these hook into existing EMQX events
+-export([
+    on_message_delivered/2,
+    on_message_acked/2,
+    on_message_dropped/3
 ]).
 
 %% Gen_server callbacks
@@ -122,6 +132,14 @@ get_stats() ->
 -spec update_config(map()) -> ok.
 update_config(Config) ->
     gen_server:call(?MODULE, {update_config, Config}, 5000).
+
+%% @doc Cleanup all tracked messages for a client
+%% (called when session terminates, though hooks already handle this)
+-spec cleanup_client_messages(binary() | undefined) -> ok.
+cleanup_client_messages(_ClientId) ->
+    %% Hook-based approach handles cleanup via message.dropped
+    %% This is a stub for compatibility
+    ok.
 
 %%--------------------------------------------------------------------
 %% Internal functions - Direct ETS operations
@@ -315,6 +333,73 @@ terminate(_Reason, State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+%%--------------------------------------------------------------------
+%% Hook Registration - Non-intrusive integration with EMQX
+%%--------------------------------------------------------------------
+
+%% @doc Register hooks to listen for message lifecycle events
+%% These hooks fire at natural points in EMQX without modifying core logic
+-spec register_hooks() -> ok.
+register_hooks() ->
+    %% When a message is delivered to client, start tracking for timeout
+    ok = emqx_hooks:add('message.delivered', {?MODULE, on_message_delivered, []}),
+    %% When message is ACK'd/confirmed, cancel tracking
+    ok = emqx_hooks:add('message.acked', {?MODULE, on_message_acked, []}),
+    %% When message is dropped, cancel tracking
+    ok = emqx_hooks:add('message.dropped', {?MODULE, on_message_dropped, []}),
+    ?SLOG(info, #{msg => "delivery_timeout_hooks_registered"}),
+    ok.
+
+%% @doc Unregister hooks on shutdown
+-spec unregister_hooks() -> ok.
+unregister_hooks() ->
+    ok = emqx_hooks:del('message.delivered', {?MODULE, on_message_delivered}),
+    ok = emqx_hooks:del('message.acked', {?MODULE, on_message_acked}),
+    ok = emqx_hooks:del('message.dropped', {?MODULE, on_message_dropped}),
+    ?SLOG(info, #{msg => "delivery_timeout_hooks_unregistered"}),
+    ok.
+
+%%--------------------------------------------------------------------
+%% Hook Handlers - Called at message lifecycle events
+%%--------------------------------------------------------------------
+
+%% @doc Hook handler for when message is delivered to client
+%% Parameters: [ClientInfo, Message]
+on_message_delivered(ClientInfo, Message) ->
+    case is_enabled() of
+        true ->
+            MsgId = emqx_message:id(Message),
+            ClientId = maps:get(clientid, ClientInfo, undefined),
+            track_queued_message(MsgId, ClientId, Message);
+        false ->
+            ok
+    end,
+    ok.
+
+%% @doc Hook handler for when message is ACK'd by client
+%% Parameters: [ClientInfo, Message]
+on_message_acked(_ClientInfo, Message) ->
+    case is_enabled() of
+        true ->
+            MsgId = emqx_message:id(Message),
+            cancel_tracking(MsgId);
+        false ->
+            ok
+    end,
+    ok.
+
+%% @doc Hook handler for when message is dropped
+%% Parameters: [Message, By, Reason]
+on_message_dropped(Message, _By, _Reason) ->
+    case is_enabled() of
+        true ->
+            MsgId = emqx_message:id(Message),
+            cancel_tracking(MsgId);
+        false ->
+            ok
+    end,
+    ok.
 
 %%--------------------------------------------------------------------
 %% Internal functions
