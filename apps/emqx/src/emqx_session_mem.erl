@@ -409,6 +409,8 @@ is_awaiting_full(#session{
 puback(ClientInfo, PacketId, Session = #session{inflight = Inflight}) ->
     case emqx_inflight:lookup(PacketId, Inflight) of
         {value, #inflight_data{phase = wait_ack, message = #message{qos = ?QOS_1} = Msg}} ->
+            %% Cancel delivery timeout tracking (message was acknowledged)
+            _ = emqx_delivery_timeout:cancel_tracking(emqx_message:id(Msg)),
             Inflight1 = emqx_inflight:delete(PacketId, Inflight),
             Session1 = Session#session{inflight = Inflight1},
             {ok, Replies, Session2} = dequeue(ClientInfo, Session1),
@@ -468,6 +470,8 @@ pubrel(PacketId, Session = #session{awaiting_rel = AwaitingRel}) ->
 pubcomp(ClientInfo, PacketId, Session = #session{inflight = Inflight}) ->
     case emqx_inflight:lookup(PacketId, Inflight) of
         {value, #inflight_data{phase = wait_comp, message = #message{qos = ?QOS_2} = Msg}} ->
+            %% Cancel delivery timeout tracking (QoS 2 message completed)
+            _ = emqx_delivery_timeout:cancel_tracking(emqx_message:id(Msg)),
             Inflight1 = emqx_inflight:delete(PacketId, Inflight),
             Session1 = Session#session{inflight = Inflight1},
             {ok, Replies, Session2} = dequeue(ClientInfo, Session1),
@@ -558,6 +562,10 @@ deliver_msg(
             Publish = {PacketId, maybe_ack(Msg)},
             MarkedMsg = mark_begin_deliver(Msg),
             Inflight1 = emqx_inflight:insert(PacketId, with_ts(MarkedMsg), Inflight),
+            %% Track message for delivery timeout (non-blocking callback)
+            _ = emqx_delivery_timeout:track_queued_message(
+                emqx_message:id(Msg), maps:get(clientid, ClientInfo, undefined), Msg
+            ),
             {ok, [Publish], next_pkt_id(Session#session{inflight = Inflight1})}
     end.
 
