@@ -883,6 +883,8 @@ maybe_enable_delivery_timeout(#{from := Events}) ->
     case lists:member('delivery.timeout', Events) of
         true ->
             catch emqx_delivery_timeout:enable(),
+            %% CRITICAL: Register the rule engine's hook handler so events actually fire
+            catch emqx_hooks:add('delivery.timeout', {emqx_rule_events, on_delivery_timeout, []}),
             ok;
         false ->
             ok
@@ -894,6 +896,8 @@ maybe_disable_delivery_timeout() ->
     Tags = get_rules_with_same_event(undefined, <<"$events/delivery/timeout">>),
     case Tags of
         [] ->
+            %% CRITICAL: Unregister the rule engine's hook handler to save resources
+            catch emqx_hooks:del('delivery.timeout', {emqx_rule_events, on_delivery_timeout}),
             %% No more rules using delivery.timeout - disable to save resources
             catch emqx_delivery_timeout:disable(),
             ok;

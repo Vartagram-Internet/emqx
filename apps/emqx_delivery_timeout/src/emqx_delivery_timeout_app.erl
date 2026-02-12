@@ -21,6 +21,8 @@ start(_StartType, _StartArgs) ->
 stop(_State) ->
     %% Unregister hooks on application stop
     ok = emqx_delivery_timeout:unregister_hooks(),
+    %% Unregister delivery.timeout specific hook handler
+    catch emqx_hooks:del('delivery.timeout', {emqx_rule_events, on_delivery_timeout}),
     ok.
 
 %% @doc Check if any existing rules use delivery.timeout event and enable if so
@@ -33,8 +35,15 @@ maybe_enable_from_existing_rules() ->
                     undefined, <<"$events/delivery/timeout">>
                 ),
                 case Tags of
-                    [] -> ok;
-                    [_ | _] -> emqx_delivery_timeout:enable()
+                    [] ->
+                        ok;
+                    [_ | _] ->
+                        %% Enable feature
+                        emqx_delivery_timeout:enable(),
+                        %% Register hook handler so events fire
+                        catch emqx_hooks:add(
+                            'delivery.timeout', {emqx_rule_events, on_delivery_timeout, []}
+                        )
                 end;
             false ->
                 %% Rule engine not loaded yet
